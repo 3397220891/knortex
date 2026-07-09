@@ -1,32 +1,42 @@
 from neo4j import GraphDatabase
 from config import settings
 from typing import List, Dict
-import uuid
 
 class KnowledgeGraphService:
     """
-    Service for storing and querying knowledge in Neo4j
+    Service for storing and querying the graph projection in Neo4j.
+
+    PostgreSQL (see services/document_store.py) is the source of truth for
+    documents, chunks and extraction results. Neo4j only stores the minimal
+    fields needed for relationship traversal, keyed by the same entity ids
+    PostgreSQL already assigned - it never duplicates document content.
     """
-    
+
     def __init__(self):
         self.driver = GraphDatabase.driver(
             settings.NEO4J_URI,
-            auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+            auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
+            # Fail fast if Neo4j is unreachable instead of blocking the caller
+            # (an upload request, or now a Celery worker) for the ~60s default.
+            connection_timeout=5,
+            connection_acquisition_timeout=5,
+            max_transaction_retry_time=5,
         )
-    
+
     def close(self):
         self.driver.close()
-    
-    def create_entity(self, entity: Dict) -> str:
-        """Create an entity node in Neo4j"""
+
+    def create_entity(self, entity: Dict, entity_id: str) -> str:
+        """Create an entity node in Neo4j, keyed by its PostgreSQL entity id"""
         with self.driver.session() as session:
             result = session.execute_write(
-                self._create_entity_node, 
-                entity
+                self._create_entity_node,
+                entity,
+                entity_id
             )
             return result
-    
-    def _create_entity_node(self, tx, entity: Dict):
+
+    def _create_entity_node(self, tx, entity: Dict, entity_id: str):
         """Internal method to create entity node"""
         query = """
         MERGE (e:Entity {name: $name, type: $type})
@@ -35,8 +45,7 @@ class KnowledgeGraphService:
             e.created_at = timestamp()
         RETURN e.id
         """
-        
-        entity_id = str(uuid.uuid4())
+
         result = tx.run(
             query,
             name=entity["name"],
@@ -44,7 +53,7 @@ class KnowledgeGraphService:
             properties=entity.get("properties", {}),
             id=entity_id
         )
-        
+
         return result.single()[0]
     
     def create_relationship(self, relationship: Dict):
@@ -90,23 +99,29 @@ class KnowledgeGraphService:
             print(f"Error in relationship transaction: {e}")
             return None
     
-    def store_extraction_result(self, extraction_result: Dict):
-        """Store complete extraction result in Neo4j"""
-        entity_ids = []
-        
-        # Store entities
+    def store_extraction_result(self, extraction_result: Dict, entity_ids: Dict[str, str]):
+        """Project an extraction result into Neo4j.
+
+        entity_ids maps entity name -> PostgreSQL entities.id, as returned by
+        DocumentStore.save_extraction. Entities without a PG id (e.g. virtual
+        entities that were never persisted) are skipped.
+        """
+        stored_ids = []
+
         for entity in extraction_result["entities"]:
-            entity_id = self.create_entity(entity)
-            entity_ids.append(entity_id)
-        
-        # Store relationships
+            pg_id = entity_ids.get(entity["name"])
+            if not pg_id:
+                continue
+            self.create_entity(entity, pg_id)
+            stored_ids.append(pg_id)
+
         for relationship in extraction_result["relationships"]:
             self.create_relationship(relationship)
-        
+
         return {
-            "stored_entities": len(extraction_result["entities"]),
+            "stored_entities": len(stored_ids),
             "stored_relationships": len(extraction_result["relationships"]),
-            "entity_ids": entity_ids
+            "entity_ids": stored_ids
         }
     
     def search_entities(self, keyword: str, limit: int = 50) -> List[Dict]:

@@ -1,8 +1,7 @@
 import React, { useState, useCallback } from 'react';
-import { Upload, Button, message, Card, Progress, Typography, Space, Tag } from 'antd';
+import { Upload, message, Card, Progress, Typography, Space, Tag } from 'antd';
 import { InboxOutlined, FileTextOutlined, FilePdfOutlined, FileWordOutlined } from '@ant-design/icons';
-import { apiService, UploadResponse } from '../services/api';
-import { FileUpload as FileUploadType } from '../types';
+import { apiService, UploadResponse, TaskStatusResponse } from '../services/api';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -11,38 +10,59 @@ interface FileUploadProps {
   onUploadSuccess?: (result: UploadResponse) => void;
 }
 
+// Processing (parsing + NER + PostgreSQL/Neo4j writes) happens in a Celery
+// worker, so we poll GET /tasks/{task_id} until it's done.
+const POLL_INTERVAL_MS = 1500;
+const MAX_POLL_ATTEMPTS = 60; // ~90s before giving up
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [processingLabel, setProcessingLabel] = useState('Uploading file...');
   const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
 
   const handleUpload = useCallback(async (file: File) => {
     setUploading(true);
-    setUploadProgress(0);
+    setUploadProgress(10);
+    setProcessingLabel('Uploading file...');
     setUploadResult(null);
 
     try {
-      // Simulate upload progress
-      const progressInterval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(progressInterval);
-            return 90;
-          }
-          return prev + 10;
-        });
-      }, 200);
+      const accepted = await apiService.uploadFile(file);
+      setUploadProgress(30);
+      setProcessingLabel('Processing in background (extracting entities & relationships)...');
 
-      const result = await apiService.uploadFile(file);
-      
-      clearInterval(progressInterval);
-      setUploadProgress(100);
-      setUploadResult(result);
+      let finalStatus: TaskStatusResponse | null = null;
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+        const taskStatus = await apiService.getTaskStatus(accepted.task_id);
+        if (taskStatus.status !== 'processing') {
+          finalStatus = taskStatus;
+          break;
+        }
+        setUploadProgress((prev) => Math.min(90, prev + 5));
+        await sleep(POLL_INTERVAL_MS);
+      }
+
       setUploading(false);
-      
-      message.success('File uploaded and processed successfully!');
-      onUploadSuccess?.(result);
-      
+
+      if (!finalStatus) {
+        message.error('Processing timed out, please check back later');
+        setUploadProgress(0);
+        return;
+      }
+
+      if (finalStatus.status === 'completed' && finalStatus.result) {
+        const result: UploadResponse = { file_id: accepted.file_id, ...finalStatus.result };
+        setUploadProgress(100);
+        setUploadResult(result);
+        message.success('File uploaded and processed successfully!');
+        onUploadSuccess?.(result);
+      } else {
+        setUploadProgress(0);
+        message.error(`Processing failed: ${finalStatus.error || 'unknown error'}`);
+      }
     } catch (error: any) {
       setUploading(false);
       setUploadProgress(0);
@@ -103,7 +123,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
             <InboxOutlined />
           </p>
           <p className="ant-upload-text">
-            {uploading ? 'Processing file...' : 'Click or drag files to this area to upload'}
+            {uploading ? processingLabel : 'Click or drag files to this area to upload'}
           </p>
           <p className="ant-upload-hint">
             Support single file upload, only PDF, DOCX, TXT formats

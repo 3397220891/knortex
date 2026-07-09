@@ -102,7 +102,7 @@ const EntitySearch: React.FC<EntitySearchProps> = ({ onEntitySelect }) => {
                 <div>
                   <Space size="small">
                     {entityData.labels.map((label: string, idx: number) => (
-                      <Tag key={idx} size="small">{label}</Tag>
+                      <Tag key={idx}>{label}</Tag>
                     ))}
                   </Space>
                 </div>

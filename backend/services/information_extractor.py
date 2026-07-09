@@ -1,92 +1,70 @@
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List
+
+import spacy
+
+_NLP = None
+
+# spaCy's GPE (countries/cities/states) and LOC (other locations, e.g. mountain
+# ranges) both map onto our single "Location" entity type.
+_LABEL_TO_TYPE = {
+    "PERSON": "Person",
+    "ORG": "Organization",
+    "GPE": "Location",
+    "LOC": "Location",
+}
+
+
+def _get_nlp():
+    """Lazily load the spaCy model once per process - loading it is the
+    expensive part (tens of ms), running it on a doc is cheap."""
+    global _NLP
+    if _NLP is None:
+        _NLP = spacy.load("en_core_web_sm")
+    return _NLP
+
 
 class InformationExtractor:
     """
-    Advanced information extraction with improved entity recognition
+    Entity extraction via spaCy NER (en_core_web_sm); relationship extraction
+    via context-aware regex patterns matched against the recognized entities.
     """
-    
+
     @staticmethod
     def extract_entities(text: str) -> List[Dict]:
-        """Extract entities with improved patterns and context awareness"""
+        """Extract Person/Organization/Location entities using spaCy NER"""
+        doc = _get_nlp()(text)
         entities = []
         seen_entities = set()
-    
-        # Extract locations first - using predefined location list
-        locations = ["New York", "San Francisco", "London", "Tokyo", "Boston", "Seattle"]
-        found_locations = []
-        for loc in locations:
-            if loc in text:
-                found_locations.append(loc)
-    
-        # Improved organization extraction - match more patterns
-        org_patterns = [
-            r'\b([A-Z][a-zA-Z]*(?: Corp| Inc| Company| Ltd| Corporation| Software| Solutions))\b',
-            r'\b([A-Z][a-zA-Z]+ (?:Corp|Inc|Company|Ltd|Corporation))\b',
-            r'\b(the company)\b',  # Match "the company" reference
-        ]
-    
-    
-        organizations = []
-        for pattern in org_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            organizations.extend(matches)
-    
-        # Improved person name extraction - exclude location names
-        person_pattern = r'\b([A-Z][a-z]+ [A-Z][a-z]+)\b'
-        persons = re.findall(person_pattern, text)
-    
-        # Filter out location names mistakenly identified as Person
-        persons = [p for p in persons if p not in found_locations]
-    
-        # Create entity objects
-        for loc in found_locations:
-            if loc not in seen_entities:
-                entities.append({
-                    "name": loc,
-                    "type": "Location",
-                    "properties": {
-                        "source": "predefined_list",
-                        "confidence": 0.95
-                    }
-                })
-                seen_entities.add(loc)
-    
-        for org in organizations:
-            if org and org not in seen_entities:
-                # Handle "the company" reference
-                if org.lower() == "the company":
-                    org = "TechCorp"  # Infer from context
-                entities.append({
-                    "name": org,
-                    "type": "Organization",
-                    "properties": {
-                        "source": "text_extraction", 
-                        "confidence": 0.8
-                    }
-                })
-                seen_entities.add(org)
-    
-        for person in persons:
-            if person not in seen_entities:
-                entities.append({
-                    "name": person,
-                    "type": "Person",
-                    "properties": {
-                        "source": "text_extraction",
-                        "confidence": 0.9
-                    }
-                })
-                seen_entities.add(person)
-    
+
+        for ent in doc.ents:
+            entity_type = _LABEL_TO_TYPE.get(ent.label_)
+            if entity_type is None:
+                continue
+
+            # spaCy sometimes includes trailing punctuation in the span
+            # (e.g. "TechCorp Inc." at the end of a sentence).
+            name = ent.text.strip().rstrip(".")
+            if not name or name in seen_entities:
+                continue
+
+            entities.append({
+                "name": name,
+                "type": entity_type,
+                "properties": {
+                    "source": "spacy_ner",
+                    "confidence": 0.85
+                }
+            })
+            seen_entities.add(name)
+
         return entities
     
     @staticmethod
     def extract_relationships(text: str, entities: List[Dict]) -> List[Dict]:
         """Extract relationships with context-aware patterns"""
         relationships = []
-        text_lower = text.lower()
-    
+
         # Create entity mapping
         entity_map = {entity["name"]: entity for entity in entities}
     
@@ -113,8 +91,8 @@ class InformationExtractor:
             "COLLABORATES_WITH", "Person", "Person"),
         
             # serves as Role
-            (r'(\w+ \w+) serves as (?:the )?(\w+)', 
-         "  HAS_POSITION", "Person", "Position")
+            (r'(\w+ \w+) serves as (?:the )?(\w+)',
+            "HAS_POSITION", "Person", "Position")
         ]
     
         for pattern, rel_type, source_type, target_type in relationship_patterns:

@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Layout, Typography, Tabs, message, Space, Tag, Button } from 'antd';
+import { useState, useEffect } from 'react';
+import { Layout, Typography, Tabs, message, Space, Tag, Button, Card } from 'antd';
 import { 
   UploadOutlined, 
   SearchOutlined, 
@@ -18,7 +18,6 @@ import './styles/App.css';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
-const { TabPane } = Tabs;
 
 function App() {
   const [activeTab, setActiveTab] = useState('upload');
@@ -29,7 +28,7 @@ function App() {
   useEffect(() => {
     const checkHealth = async () => {
       try {
-        const response = await apiService.checkHealth();
+        await apiService.checkHealth();
         setHealthStatus('healthy');
         message.success('Backend service connected successfully');
       } catch (error) {
@@ -41,7 +40,7 @@ function App() {
     checkHealth();
   }, []);
 
-  const handleUploadSuccess = (result: UploadResponse) => {
+  const handleUploadSuccess = (_result: UploadResponse) => {
     message.success('Document processing completed!');
     // Can trigger graph data refresh here
     setActiveTab('graph');

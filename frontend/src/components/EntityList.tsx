@@ -4,7 +4,7 @@ import { UserOutlined, SearchOutlined, ReloadOutlined, FilterOutlined } from '@a
 import { apiService } from '../services/api';
 import { Entity } from '../types';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Search } = Input;
 const { Option } = Select;
 
@@ -135,7 +135,7 @@ const EntityList: React.FC<EntityListProps> = ({ onEntitySelect }) => {
                 <div>
                   <Space size="small">
                     {entityData.labels.map((label: string, idx: number) => (
-                      <Tag key={idx} size="small">{label}</Tag>
+                      <Tag key={idx}>{label}</Tag>
                     ))}
                   </Space>
                 </div>
@@ -188,7 +188,7 @@ const EntityList: React.FC<EntityListProps> = ({ onEntitySelect }) => {
             <Option value="all">All Types</Option>
             {entityTypes.map(type => (
               <Option key={type} value={type}>
-                <Tag color={getEntityTypeColor(type)} size="small">
+                <Tag color={getEntityTypeColor(type)}>
                   {type}
                 </Tag>
               </Option>

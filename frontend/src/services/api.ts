@@ -35,8 +35,19 @@ api.interceptors.response.use(
 );
 
 // API Interface Definitions
-export interface UploadResponse {
+
+// Returned immediately by POST /upload - processing happens in the background.
+export interface UploadAcceptedResponse {
+  task_id: string;
   file_id: string;
+  filename: string;
+  status: string;
+  message: string;
+}
+
+// The full processing result, available once the background task finishes.
+export interface TaskResult {
+  document_id: string;
   filename: string;
   saved_path: string;
   content_length: number;
@@ -45,6 +56,19 @@ export interface UploadResponse {
   extraction_result: any;
   storage_result: any;
   message: string;
+}
+
+export interface TaskStatusResponse {
+  task_id: string;
+  status: 'processing' | 'completed' | 'failed';
+  result?: TaskResult;
+  error?: string;
+}
+
+// Kept for components that render a merged { ...accepted, ...result } object
+// once processing completes (see FileUpload.tsx).
+export interface UploadResponse extends TaskResult {
+  file_id: string;
 }
 
 export interface SearchResponse {
@@ -76,16 +100,22 @@ export const apiService = {
     return response.data;
   },
 
-  // File Upload
-  async uploadFile(file: File): Promise<UploadResponse> {
+  // File Upload - returns a task id immediately, processing runs in the background
+  async uploadFile(file: File): Promise<UploadAcceptedResponse> {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     const response = await api.post('/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
     });
+    return response.data;
+  },
+
+  // Poll the status of a background processing task
+  async getTaskStatus(taskId: string): Promise<TaskStatusResponse> {
+    const response = await api.get(`/tasks/${taskId}`);
     return response.data;
   },
 

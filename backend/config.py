@@ -1,19 +1,20 @@
-import os
-from typing import Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-class Settings:
-    # Tasks:
-    # - Read environment variables with os.getenv()
-    # - Add default values for development
-    # - Ensure essential configuration exists
-    
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "password"
-    
-    # Additional configurations:
-    # - UPLOAD_DIR: str (file upload path)
-    # - OPENAI_API_KEY: Optional[str] (for future AI functionality)
-    # - DEBUG: bool (development mode)
+
+    POSTGRES_URL: str = "postgresql+psycopg2://knortex:knortex@localhost:5432/knortex"
+
+    REDIS_URL: str = "redis://localhost:6379/0"
+
+    UPLOAD_DIR: str = "uploads"
+    DEBUG: bool = False
+    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+
 
 settings = Settings()
