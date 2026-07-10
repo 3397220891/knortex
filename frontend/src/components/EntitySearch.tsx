@@ -75,7 +75,7 @@ const EntitySearch: React.FC<EntitySearchProps> = ({ onEntitySelect }) => {
               onEntitySelect?.(entityData);
             }}
           >
-            查看详情
+            View Details
           </Button>
         ]}
       >
