@@ -1,3 +1,5 @@
+import uuid
+
 from neo4j import GraphDatabase
 from config import settings
 from typing import List, Dict
@@ -37,11 +39,12 @@ class KnowledgeGraphService:
             return result
 
     def _create_entity_node(self, tx, entity: Dict, entity_id: str):
-        """Internal method to create entity node"""
+        """Internal method to create entity node, keyed by id"""
         query = """
-        MERGE (e:Entity {name: $name, type: $type})
-        SET e += $properties,
-            e.id = $id,
+        MERGE (e:Entity {id: $id})
+        SET e.name = $name,
+            e.type = $type,
+            e += $properties,
             e.created_at = timestamp()
         RETURN e.id
         """
@@ -56,13 +59,15 @@ class KnowledgeGraphService:
 
         return result.single()[0]
     
-    def create_relationship(self, relationship: Dict):
-        """Create a relationship between entities"""
+    def create_relationship(self, relationship: Dict, from_id: str, to_id: str):
+        """Create a relationship between two entities, matched by id"""
         try:
             with self.driver.session() as session:
                 result = session.execute_write(
                     self._create_relationship_edge,
-                    relationship
+                    relationship,
+                    from_id,
+                    to_id
                 )
                 return result
         except Exception as e:
@@ -70,57 +75,68 @@ class KnowledgeGraphService:
             print(f"Relationship data: {relationship}")
             return None
 
-    def _create_relationship_edge(self, tx, relationship: Dict):
+    def _create_relationship_edge(self, tx, relationship: Dict, from_id: str, to_id: str):
         """Internal method to create relationship with error handling"""
         try:
             query = """
-            MATCH (a:Entity {name: $from_name}), (b:Entity {name: $to_name})
+            MATCH (a:Entity {id: $from_id}), (b:Entity {id: $to_id})
             MERGE (a)-[r:RELATIONSHIP {type: $rel_type}]->(b)
             SET r += $properties,
                 r.id = $rel_id,
                 r.created_at = timestamp()
             RETURN r.id
             """
-        
-            rel_id = str(uuid.uuid4())
+
+            # Reuse the id minted at extraction time when present, so the same id
+            # identifies this relationship in both Postgres and Neo4j.
+            rel_id = relationship.get("id") or str(uuid.uuid4())
             result = tx.run(
                 query,
-                from_name=relationship["from"],
-                to_name=relationship["to"], 
+                from_id=from_id,
+                to_id=to_id,
                 rel_type=relationship["type"],
                 properties=relationship.get("properties", {}),
                 rel_id=rel_id
             )
-        
+
             record = result.single()
             return record[0] if record else None
-        
+
         except Exception as e:
             print(f"Error in relationship transaction: {e}")
             return None
     
     def store_extraction_result(self, extraction_result: Dict, entity_ids: Dict[str, str]):
-        """Project an extraction result into Neo4j.
+        """Project an extraction result into Neo4j, matched by id throughout.
 
         entity_ids maps entity name -> PostgreSQL entities.id, as returned by
-        DocumentStore.save_extraction. Entities without a PG id (e.g. virtual
-        entities that were never persisted) are skipped.
+        DocumentStore.save_extraction; it's the authoritative source but each
+        entity/relationship dict also carries its own id (minted by
+        InformationExtractor) as a fallback for callers that skip DocumentStore.
+        Entities/relationships without a resolvable id (e.g. virtual entities
+        that were never persisted) are skipped.
         """
         stored_ids = []
+        stored_relationships = 0
 
         for entity in extraction_result["entities"]:
-            pg_id = entity_ids.get(entity["name"])
+            pg_id = entity_ids.get(entity["name"]) or entity.get("id")
             if not pg_id:
                 continue
             self.create_entity(entity, pg_id)
             stored_ids.append(pg_id)
 
         for relationship in extraction_result["relationships"]:
-            self.create_relationship(relationship)
+            from_id = entity_ids.get(relationship["from"]) or relationship.get("from_id")
+            to_id = entity_ids.get(relationship["to"]) or relationship.get("to_id")
+            if not from_id or not to_id:
+                continue
+            self.create_relationship(relationship, from_id, to_id)
+            stored_relationships += 1
 
         return {
             "stored_entities": len(stored_ids),
-            "stored_relationships": len(extraction_result["relationships"]),
+            "stored_relationships": stored_relationships,
             "entity_ids": stored_ids
         }
     

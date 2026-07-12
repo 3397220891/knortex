@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class Entity(BaseModel):
+    id: str
     name: str
     type: str  # Person, Organization, Location, etc.
     properties: Dict[str, Any] = {}
@@ -12,8 +13,11 @@ class Entity(BaseModel):
 class Relationship(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    id: str
     from_entity: str = Field(alias="from")
     to_entity: str = Field(alias="to")
+    from_id: Optional[str] = None
+    to_id: Optional[str] = None
     type: str  # WORKS_AT, LOCATED_IN, etc.
     properties: Dict[str, Any] = {}
 

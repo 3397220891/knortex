@@ -48,13 +48,18 @@ class DocumentStore:
 
             entity_id_by_name: Dict[str, str] = {}
             for entity in extraction_result["entities"]:
-                record = EntityRecord(
+                record_kwargs = dict(
                     extraction_run_id=run.id,
                     name=entity["name"],
                     type=entity["type"],
                     confidence=entity.get("properties", {}).get("confidence", 0.0),
                     properties=entity.get("properties", {}),
                 )
+                # Reuse the id minted at extraction time (see information_extractor.py)
+                # so the same id identifies this entity in both Postgres and Neo4j.
+                if entity.get("id"):
+                    record_kwargs["id"] = entity["id"]
+                record = EntityRecord(**record_kwargs)
                 session.add(record)
                 session.flush()
                 entity_id_by_name[entity["name"]] = record.id
@@ -68,7 +73,7 @@ class DocumentStore:
                 if not from_id or not to_id:
                     continue
 
-                relation_record = RelationRecord(
+                relation_kwargs = dict(
                     extraction_run_id=run.id,
                     from_entity_id=from_id,
                     to_entity_id=to_id,
@@ -76,6 +81,11 @@ class DocumentStore:
                     confidence=rel.get("properties", {}).get("confidence", 0.0),
                     properties=rel.get("properties", {}),
                 )
+                # Reuse the id minted at extraction time so the same id identifies
+                # this relation in both Postgres and Neo4j.
+                if rel.get("id"):
+                    relation_kwargs["id"] = rel["id"]
+                relation_record = RelationRecord(**relation_kwargs)
                 session.add(relation_record)
                 session.flush()
 

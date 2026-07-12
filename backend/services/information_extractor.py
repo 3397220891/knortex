@@ -1,4 +1,5 @@
 import re
+import uuid
 from typing import Dict, List
 
 import spacy
@@ -13,6 +14,42 @@ _LABEL_TO_TYPE = {
     "GPE": "Location",
     "LOC": "Location",
 }
+
+# Consecutive Capitalized words, e.g. "TechCorp", "TechCorp Inc", "New York" - a
+# lightweight proper-noun heuristic. Unlike a hardcoded corporate-suffix
+# alternation (" Corp| Inc| Company| Ltd"), it doesn't require a suffix to be
+# present, and unlike an unanchored `[\w\s]+`, it stays bounded to capitalized
+# words so it can't run on past the end of a sentence. Wrapped in a scoped
+# `(?-i:...)` so it stays case-sensitive even though extract_relationships runs
+# every pattern with re.IGNORECASE (needed for the surrounding literal phrases).
+_PROPER_NOUN = r"(?-i:[A-Z][\w'-]*(?:\s[A-Z][\w'-]*)*)"
+
+# (pattern, relationship type, source entity type, target entity type)
+_RELATIONSHIP_PATTERNS = [
+    # CEO of Organization
+    (r'(\w+ \w+) is the CEO of (' + _PROPER_NOUN + r')',
+    "CEO_OF", "Person", "Organization"),
+
+    # works as at Organization
+    (r'(\w+ \w+) works as (?:a|an)? ([^,.]+) at (' + _PROPER_NOUN + r')',
+    "WORKS_AT", "Person", "Organization"),
+
+    # headquartered in Location
+    (r'(' + _PROPER_NOUN + r') is headquartered in (' + _PROPER_NOUN + r')',
+    "HEADQUARTERED_IN", "Organization", "Location"),
+
+    # has office in Location
+    (r'(' + _PROPER_NOUN + r') has (?:a|an)? ([^,.]+) office in (' + _PROPER_NOUN + r')',
+    "HAS_OFFICE_IN", "Organization", "Location"),
+
+    # works with Person
+    (r'(\w+ \w+) works (?:closely )?with (\w+ \w+)',
+    "COLLABORATES_WITH", "Person", "Person"),
+
+    # serves as Role
+    (r'(\w+ \w+) serves as (?:the )?(\w+)',
+    "HAS_POSITION", "Person", "Position")
+]
 
 
 def _get_nlp():
@@ -49,6 +86,7 @@ class InformationExtractor:
                 continue
 
             entities.append({
+                "id": str(uuid.uuid4()),
                 "name": name,
                 "type": entity_type,
                 "properties": {
@@ -67,35 +105,8 @@ class InformationExtractor:
 
         # Create entity mapping
         entity_map = {entity["name"]: entity for entity in entities}
-    
-        # Improved relationship patterns
-        relationship_patterns = [
-            # CEO of Organization
-            (r'(\w+ \w+) is the CEO of ([\w\s]+(?: Corp| Inc| Company| Ltd))', 
-            "CEO_OF", "Person", "Organization"),
-        
-            # works as at Organization
-            (r'(\w+ \w+) works as (?:a|an)? ([^,.]+) at ([\w\s]+(?: Corp| Inc| Company| Ltd))', 
-            "WORKS_AT", "Person", "Organization"),
-        
-            # headquartered in Location
-            (r'([\w\s]+(?: Corp| Inc| Company| Ltd)) is headquartered in ([\w\s]+)', 
-            "HEADQUARTERED_IN", "Organization", "Location"),
-        
-            # has office in Location
-            (r'([\w\s]+(?: Corp| Inc| Company| Ltd)) has (?:a|an)? ([^,.]+) office in ([\w\s]+)', 
-            "HAS_OFFICE_IN", "Organization", "Location"),
-        
-            # works with Person
-            (r'(\w+ \w+) works (?:closely )?with (\w+ \w+)', 
-            "COLLABORATES_WITH", "Person", "Person"),
-        
-            # serves as Role
-            (r'(\w+ \w+) serves as (?:the )?(\w+)',
-            "HAS_POSITION", "Person", "Position")
-        ]
-    
-        for pattern, rel_type, source_type, target_type in relationship_patterns:
+
+        for pattern, rel_type, source_type, target_type in _RELATIONSHIP_PATTERNS:
             matches = re.finditer(pattern, text, re.IGNORECASE)
             for match in matches:
                 source_name = match.group(1)
@@ -122,8 +133,11 @@ class InformationExtractor:
                         (target_entity["type"] == target_type or target_type == "Position")):
                     
                         relationships.append({
+                            "id": str(uuid.uuid4()),
                             "from": source_name,
                             "to": target_name,
+                            "from_id": source_entity.get("id"),
+                            "to_id": target_entity.get("id"),
                             "type": rel_type,
                             "properties": {
                                 "source": "pattern_match",
@@ -155,3 +169,13 @@ class InformationExtractor:
                 "location_count": len([e for e in entities if e["type"] == "Location"])
             }
         }
+
+
+def get_extractor():
+    """Single seam for selecting which extraction strategy runs.
+
+    Currently always the regex/spaCy-based InformationExtractor; a future
+    trigger-word or LLM-based extractor can be swapped in here (e.g. behind a
+    config flag) without touching callers.
+    """
+    return InformationExtractor

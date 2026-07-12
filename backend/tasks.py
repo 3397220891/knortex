@@ -1,10 +1,11 @@
 from typing import Dict
 
 from celery_app import celery_app
+from models.knowledge_models import ExtractionResult
 from services import document_store as document_store_module
 from services import knowledge_graph as knowledge_graph_module
 from services.document_parser import DocumentParser
-from services.information_extractor import InformationExtractor
+from services.information_extractor import get_extractor
 
 
 @celery_app.task(name="process_document")
@@ -21,7 +22,10 @@ def process_document_task(file_path: str, filename: str, file_extension: str) ->
     else:
         parsed_data = DocumentParser.parse_txt(file_path)
 
-    extraction_result = InformationExtractor.process_text(parsed_data["content"])
+    extraction_result = get_extractor().process_text(parsed_data["content"])
+    # Fail fast if the extractor's output ever drifts from the contract downstream
+    # code relies on, regardless of which extraction strategy produced it.
+    ExtractionResult.model_validate(extraction_result)
 
     # PostgreSQL is the source of truth: it assigns the entity/relation ids
     # that Neo4j then reuses to key its graph projection.
